@@ -1,7 +1,7 @@
 /* Suivi de cultures — service worker
    Page : réseau d'abord (toujours à jour, marche hors-ligne). Autres fichiers : cache d'abord.
    Appels IA jamais mis en cache. Nouvelle version activée au clic « Recharger » (message 'skipWaiting'). */
-const VERSION = '3.2';
+const VERSION = '3.4';
 const CACHE = 'suivi-cultures-' + VERSION;
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-512-maskable.png'];
 const IA_HOSTS = /(^|\.)(api\.mistral\.ai|generativelanguage\.googleapis\.com|api\.anthropic\.com|api\.openai\.com)$/;
