@@ -375,7 +375,7 @@ const store = (() => {
   };
 })();
 const KEY = 'carnet_culture_v1';
-const APP_VERSION = '3.4';
+const APP_VERSION = '3.6';
 
 /* ============================================================
    DONNÉES PAR DÉFAUT
@@ -560,6 +560,7 @@ function normalizeData(d){
     if(cr.ru==null) cr.ru=120;
     if(cr.eco==null) cr.eco=defaultEco();
     if(!Array.isArray(cr.observations)) cr.observations=[];
+    if(!Array.isArray(cr.cropNotes)) cr.cropNotes=[];
     if(typeof cr.precocity!=='number'||!(cr.precocity>0)) cr.precocity=1;
     if(cr.nbal==null||typeof cr.nbal!=='object'){ cr.nbal=defaultNbal(cr.preset); } else { const dn=defaultNbal(cr.preset); ['yieldObj','b','ri','mh','mr','norg','rf','fertId'].forEach(k=>{ if(cr.nbal[k]==null) cr.nbal[k]=dn[k]; }); }
     if(Array.isArray(cr.stages)) cr.stages.forEach(s=>{ if(typeof s.kc!=='number'||isNaN(s.kc)) s.kc=autoKc(cr.stages, s.seuil||0); });
@@ -1118,7 +1119,7 @@ async function startNewYear(){
   let diskOk=false;
   if(dirHandle){ try{ diskOk=await archiveDataToDisk(year,jsonStr); }catch(e){ diskOk=false; } }
   download('archive-campagne-'+year+'-'+new Date().toISOString().slice(0,10)+'.json', jsonStr, 'application/json');
-  (data.crops||[]).forEach(c=>{ c.entries=[]; c.observations=[]; if(c.eco) c.eco.ops=[]; c.deficitInit=0; if(!c.perennial) c.semis=''; });
+  (data.crops||[]).forEach(c=>{ c.entries=[]; c.observations=[]; c.cropNotes=[]; if(c.eco) c.eco.ops=[]; c.deficitInit=0; if(!c.perennial) c.semis=''; });
   data.deliveries=[]; data.contracts=[];
   try{ openDeliveries.clear(); openContracts.clear(); }catch(e){}
   save(); currentTab='dash'; render();
@@ -1497,7 +1498,7 @@ function render(){
   else if(currentTab==='livraisons') view.innerHTML=viewLivraisons(c);
   else if(currentTab==='rendement') view.innerHTML=viewRendement(c);
   else if(currentTab==='contrats') view.innerHTML=viewContracts(c);
-  else if(currentTab==='calculette'){ view.innerHTML=viewCalc(c); try{ yobjCropChange(); calcSeed(); }catch(e){} }
+  else if(currentTab==='calculette'){ view.innerHTML=viewCalc(c); try{ yobjCropChange(); calcSeed(); calcPmg(); calcLevee(); cleveeCount(); }catch(e){} }
   else if(currentTab==='inventaire') view.innerHTML=viewInventaire(c);
   else if(currentTab==='parcelles') view.innerHTML=viewParcelles(c);
   else if(currentTab==='params') view.innerHTML=viewParams(c);
@@ -1667,7 +1668,25 @@ function viewJournal(c){
       <div class="note">Colonnes calculées automatiquement : <b>T moy</b> = (min+max)/2 · <b>°C·j</b> = degrés-jour (base ${nf0(data.crop.tBase)} °C) · <b>ET0</b> évapotranspiration de référence (Hargreaves) · <b>ETc</b> = ET0 × Kc du stade · <b>Besoin</b> = manque d'eau dans le sol (en rouge quand il dépasse la RFU = ${nf0(c.rfu)} mm).</div>
     </div>`;
   }
-  return weatherPanelHtml()+farmCard+table;
+  const cr0=activeCrop();
+  const pname=((cr0&&cr0.eco&&cr0.eco.parcelName)||'').trim() || (cr0&&cr0.name) || '';
+  const noteList=((cr0&&cr0.cropNotes)||[]).slice().sort((a,b)=>a.date<b.date?1:-1).map(n=>`
+    <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-top:1px solid var(--line)">
+      <span style="font-size:12px;color:var(--field-deep);font-weight:600;white-space:nowrap;min-width:92px">${fmtDate(n.date)}</span>
+      <span style="flex:1;font-size:14px;white-space:pre-wrap">${escapeHtml(n.text||'')}</span>
+      <button class="icon-btn del" data-action="delCropNote" data-id="${n.id}" title="Supprimer la note">${ecoTrash()}</button>
+    </div>`).join('');
+  const notesCard=`<div class="card card-pad" style="margin-top:16px">
+    <div class="section-title">📝 Notes de terrain</div>
+    <p class="section-sub">Un carnet libre et daté pour la parcelle active${pname?` « <b>${escapeHtml(pname)}</b> »`:''} : levée, maladies, ravageurs, état du sol, dégâts… tout ce que tu veux retenir au fil de la campagne. (Le bilan de fin d'année, lui, se note dans Parcelles → Commentaires par année.)</p>
+    <div class="entry-form">
+      <div class="field wide"><label for="cn_date">Date</label><input type="date" id="cn_date" value="${today}"></div>
+      <div class="field" style="flex:2;min-width:220px"><label for="cn_text">Note</label><input type="text" id="cn_text" placeholder="ex. Levée ~50 % sur les pailles, à surveiller" onkeydown="if(event.key==='Enter'){event.preventDefault();addCropNote();}"></div>
+      <button class="btn btn-primary" data-action="addCropNote"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Enregistrer</button>
+    </div>
+    ${noteList?`<div style="margin-top:8px">${noteList}</div>`:'<p class="hint" style="margin:10px 0 0">Aucune note pour l\'instant. Note ici tes observations au fil de la saison — tu peux aussi envoyer un taux de levée depuis l\'onglet Calculette.</p>'}
+  </div>`;
+  return weatherPanelHtml()+farmCard+notesCard+table;
 }
 
 function weatherPanelHtml(){
@@ -2364,6 +2383,56 @@ function calcSeed(){
   cSet('seed_lifted', (lev>0&&lev<100&&N>0)? '→ '+calcFmt(N*lev/100,0)+' pieds levés/m² (levée '+calcFmt(lev,0)+' %)' : '');
 }
 
+/* Mesure du PMG : compte un échantillon de grains + pèse-le -> PMG. Base : PMG = poids ÷ nombre × 1000 */
+function calcPmg(){
+  const n=cNum('pmg_n'), w=cNum('pmg_w');
+  const pmg = (n>0)? w/n*1000 : 0;
+  cSet('pmg_res', (isFinite(pmg)&&pmg>0)? calcFmt(pmg,1)+' g' : '—');
+  let tip='';
+  if(n>0&&n<100) tip='Astuce : compte au moins 200 grains (500 avec une balance de cuisine) pour un PMG fiable.';
+  else if(n>=100&&w>0&&w<2) tip='Échantillon léger : pèse plus de grains, ou utilise une balance au 0,01 g.';
+  cSet('pmg_tip', tip);
+}
+function pmgUse(){
+  const n=cNum('pmg_n'), w=cNum('pmg_w'); const pmg=(n>0)? w/n*1000 : 0;
+  if(!(pmg>0)){ alert("Renseigne d'abord le nombre de grains et le poids de l'échantillon."); return; }
+  const v=Math.round(pmg*10)/10;
+  ['seed_pmg','cl_pmg','yobj_pmg'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=v; });
+  try{ calcSeed(); calcLevee(); yobjCalc(); }catch(e){}
+  cSet('pmg_tip','PMG de '+calcFmt(v,1)+' g reporté dans la densité, le taux de levée et l\'objectif de rendement.');
+}
+
+/* Taux de levée : grains semés/m² = dose(kg/ha) × 100 ÷ PMG(g) ; levée % = pieds levés/m² ÷ grains semés × 100 */
+function calcLevee(){
+  const dose=cNum('cl_dose'), pmg=cNum('cl_pmg'), plants=cNum('cl_plants');
+  const gr = (pmg>0)? dose*100/pmg : 0;
+  cSet('cl_gr', (isFinite(gr)&&gr>0)? calcFmt(gr,0)+' grains/m²' : '—');
+  const lev = (gr>0)? plants/gr*100 : 0;
+  const elL=document.getElementById('cl_lev'), elV=document.getElementById('cl_verdict');
+  if(isFinite(lev)&&lev>0&&plants>0){
+    let v, col;
+    if(lev>=85){ v='levée très correcte'; col='var(--sprout)'; }
+    else if(lev>=70){ v='levée correcte'; col='var(--field)'; }
+    else if(lev>=55){ v='levée moyenne — à surveiller'; col='var(--field-deep)'; }
+    else { v='levée faible — densité à vérifier'; col='var(--alert)'; }
+    cSet('cl_lev', calcFmt(lev,0)+' %'); cSet('cl_verdict', v);
+    if(elL) elL.style.color=col; if(elV) elV.style.color=col;
+  } else { cSet('cl_lev','—'); cSet('cl_verdict',''); if(elL) elL.style.color='var(--field-deep)'; }
+}
+let clcPm2=0;
+function cleveeCount(){
+  const n=cNum('clc_n'), L=cNum('clc_len'), E=cNum('clc_space');
+  const area = L*(E/100); // surface (m²) couverte par n pieds
+  const pm2 = (area>0)? n/area : 0;
+  clcPm2 = (isFinite(pm2)&&pm2>0)? pm2 : 0;
+  cSet('clc_res', clcPm2>0? calcFmt(clcPm2,0)+' pieds/m²' : '—');
+}
+function cleveeCountUse(){
+  if(!(clcPm2>0)){ alert('Renseigne le comptage sur un rang d\'abord (pieds, longueur, écartement).'); return; }
+  const el=document.getElementById('cl_plants'); if(el) el.value=Math.round(clcPm2);
+  try{ calcLevee(); }catch(e){}
+}
+
 function viewCalc(c){
   const catOpts=Object.keys(CALC_UNITS).map(k=>`<option value="${k}">${CALC_UNITS[k].label}</option>`).join('');
   const U0=CALC_UNITS.surface, uk=Object.keys(U0.units);
@@ -2425,6 +2494,21 @@ function viewCalc(c){
   </div>
 
   <div class="card card-pad" style="margin-top:16px">
+    <div class="section-title">⚖️ Mesure du PMG (poids de mille grains)</div>
+    <p class="section-sub">PMG oublié ou pas noté ? Mesure-le : compte un échantillon de grains, pèse-le, c'est tout. Base : <code>PMG = poids ÷ nombre × 1000</code>.</p>
+    <div class="settings-grid">
+      <div class="field"><label>Nombre de grains comptés</label><input type="number" id="pmg_n" inputmode="decimal" placeholder="ex. 200" oninput="calcPmg()"></div>
+      <div class="field"><label>Poids de l'échantillon <span class="hint">g</span></label><input type="number" id="pmg_w" inputmode="decimal" step="0.01" placeholder="ex. 9,2" oninput="calcPmg()"></div>
+      <div class="field"><label>PMG obtenu</label><div class="stat" style="margin:0;padding:8px 12px"><div class="stat-val" id="pmg_res" style="color:var(--field-deep)">—</div></div></div>
+    </div>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px">
+      <button class="btn btn-soft" data-action="pmgUse">↧ Utiliser ce PMG dans les calculs ci-dessous</button>
+      <span class="hint" id="pmg_tip"></span>
+    </div>
+    <div class="note">Compte <b>200 grains</b> (ou <b>500</b> avec une balance de cuisine au gramme) pour un bon résultat. Repères PMG : blé 38–50 g · orge 40–50 g · triticale 40–48 g · tournesol 45–70 g · maïs 250–400 g · colza 4–6 g · soja 120–220 g.</div>
+  </div>
+
+  <div class="card card-pad" style="margin-top:16px">
     <div class="section-title">🌱 Densité de semis</div>
     <p class="section-sub">Convertit une densité visée (grains/m²) en <b>dose à semer</b> (kg/ha) à partir du PMG. Base : <code>dose = grains/m² × PMG ÷ 100</code>.</p>
     <div class="settings-grid">
@@ -2437,6 +2521,34 @@ function viewCalc(c){
       <div class="hint" id="seed_lifted" style="align-self:center"></div>
     </div>
     <div class="note">Le PMG dépend de la variété et du lot (indiqué sur le sac). Le taux de levée est indicatif : il sert juste à estimer le nombre de pieds qui lèveront.</div>
+  </div>
+
+  <div class="card card-pad" style="margin-top:16px">
+    <div class="section-title">🌾 Taux de levée réel</div>
+    <p class="section-sub">Tu as compté les pieds levés au champ ? Compare-les à ce que tu as semé pour avoir ton <b>taux de levée réel</b>. Base : <code>grains semés/m² = dose × 100 ÷ PMG</code>.</p>
+    <div class="settings-grid">
+      <div class="field"><label>Dose semée <span class="hint">kg/ha</span></label><input type="number" id="cl_dose" inputmode="decimal" placeholder="ex. 160" oninput="calcLevee()"></div>
+      <div class="field"><label>PMG <span class="hint">g · mesure-le ci-dessus</span></label><input type="number" id="cl_pmg" inputmode="decimal" step="0.1" value="46" oninput="calcLevee()"></div>
+      <div class="field"><label>Pieds levés comptés <span class="hint">/m²</span></label><input type="number" id="cl_plants" inputmode="decimal" placeholder="ex. 180" oninput="calcLevee()"></div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;margin-top:12px">
+      <div class="stat"><div class="stat-label">Grains semés</div><div class="stat-val" id="cl_gr">—</div></div>
+      <div class="stat"><div class="stat-label">Taux de levée</div><div class="stat-val" id="cl_lev" style="color:var(--field-deep)">—</div><div class="hint" id="cl_verdict"></div></div>
+      <button class="btn btn-soft" data-action="leveeNote" style="margin-left:auto">📝 Noter sur la parcelle active</button>
+    </div>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)">
+      <div class="hint" style="margin-bottom:6px">Pas de cadre d'1 m² ? Compte les pieds sur une longueur de rang :</div>
+      <div class="settings-grid">
+        <div class="field"><label>Pieds comptés</label><input type="number" id="clc_n" inputmode="decimal" placeholder="ex. 120" oninput="cleveeCount()"></div>
+        <div class="field"><label>Longueur de rang <span class="hint">m</span></label><input type="number" id="clc_len" inputmode="decimal" placeholder="ex. 5" oninput="cleveeCount()"></div>
+        <div class="field"><label>Écartement entre rangs <span class="hint">cm</span></label><input type="number" id="clc_space" inputmode="decimal" placeholder="ex. 15" oninput="cleveeCount()"></div>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <div class="stat" style="margin:0"><div class="stat-label">Densité au champ</div><div class="stat-val" id="clc_res">—</div></div>
+        <button class="btn btn-soft" data-action="cleveeCountUse">↥ Utiliser comme pieds levés/m²</button>
+      </div>
+    </div>
+    <div class="note">Exemple : 160 kg/ha semés à PMG 45 → 356 grains/m². Tu comptes 180 pieds/m² → levée de 51 % : c'est faible, souvent le lit de semence, la profondeur, la limace ou le froid. Un bon semis vise 80–90 % de levée.</div>
   </div>
 
   <div class="card card-pad" style="margin-top:16px">
@@ -3158,6 +3270,9 @@ function viewAide(c){
     glossEntry('RFU','réserve facilement utilisable','Part de la RU que la plante puise sans effort (souvent 40–60 % selon le sol). Au-delà de ce seuil, elle commence à souffrir : c\'est le repère pour irriguer. Le <b>pourcentage</b> se règle sur la parcelle (onglet Parcelles) ; sa valeur en mm se déduit de la RU de chaque culture.'),
     glossEntry('Besoin','manque d\'eau du sol','Eau manquante par rapport à un sol plein (0 mm = plein). Il monte avec l\'ETc, redescend avec la pluie et l\'irrigation.'),
     glossEntry('mm','millimètre d\'eau','1 mm = 1 litre d\'eau par m² (10 m³ par hectare). Unité commune à la pluie, l\'irrigation, l\'ET0 et l\'ETc.'),
+    glossEntry('PMG','poids de mille grains','Poids (g) de 1000 grains : il dépend de la variété et du lot (indiqué sur le sac de semence). Oublié ? L\'onglet <b>Calculette</b> le mesure : compte un échantillon (200 grains), pèse-le, et <span class="abbr">PMG = poids ÷ nombre × 1000</span>. Il sert à passer des grains/m² à la dose en kg/ha, et inversement.'),
+    glossEntry('Taux de levée','part des grains levés','Pourcentage des grains semés qui ont donné un pied levé. Dans l\'onglet <b>Calculette</b> : à partir de la dose semée (kg/ha) et du PMG, l\'appli retrouve les grains semés/m², puis les compare aux pieds comptés au champ. Un bon semis vise 80–90 %.'),
+    glossEntry('Tallage','épis par pied (céréales)','Nombre de tiges portant un épi que donne un seul pied de céréale. Il multiplie le nombre de pieds pour obtenir les épis/m², composante clé de l\'objectif de rendement quand les pieds ne sont pas encore comptables au champ.'),
     glossEntry('Seuil de rentabilité','économie','Niveau de production (ou de prix de vente) à partir duquel les recettes couvrent toutes les charges saisies. En dessous, la parcelle est en perte. Calculé dans l\'onglet Rentabilité.'),
     glossEntry('Produit brut','économie','Recette attendue de la parcelle = surface × rendement × prix de vente.'),
     glossEntry('Marge','économie','Produit brut − charges totales (mécanisation + intrants + irrigation + <b>charges fixes de structure</b>). Positive = bénéfice attendu, négative = perte.'),
@@ -3297,6 +3412,11 @@ document.addEventListener('click', e=>{
   else if(a==='applyUpdate'){ const b=document.getElementById('updateBanner'); if(b)b.classList.remove('show'); if(swReg&&swReg.waiting){ swReg.waiting.postMessage('skipWaiting'); } else { location.reload(); } }
   else if(a==='startNewYear'){ startNewYear(); }
   else if(a==='yobjApply'){ yobjApply(); }
+  else if(a==='pmgUse'){ pmgUse(); }
+  else if(a==='cleveeCountUse'){ cleveeCountUse(); }
+  else if(a==='leveeNote'){ leveeNote(); }
+  else if(a==='addCropNote'){ addCropNote(); }
+  else if(a==='delCropNote'){ delCropNote(el.dataset.id); }
   else if(a==='ghConnect'){ doGhConnect(); }
   else if(a==='ghPush'){ doGhPush(); }
   else if(a==='ghPull'){ doGhPull(); }
@@ -3511,6 +3631,29 @@ function addObservation(){
   save(); render();
 }
 function delObservation(id){ const cr=activeCrop(); cr.observations=(cr.observations||[]).filter(o=>o.id!==id); save(); render(); }
+function addCropNote(){
+  const cr=activeCrop(); if(!cr){ alert('Aucune parcelle active.'); return; }
+  const date=((document.getElementById('cn_date')||{}).value)||new Date().toISOString().slice(0,10);
+  const text=(((document.getElementById('cn_text')||{}).value)||'').trim();
+  if(!text){ alert('Écris une note avant d\'enregistrer.'); return; }
+  if(!Array.isArray(cr.cropNotes)) cr.cropNotes=[];
+  cr.cropNotes.push({id:ecoId(), date, text});
+  save(); render();
+}
+function delCropNote(id){ const cr=activeCrop(); if(cr&&Array.isArray(cr.cropNotes)){ cr.cropNotes=cr.cropNotes.filter(n=>n.id!==id); save(); render(); } }
+function leveeNote(){
+  const cr=activeCrop(); if(!cr){ alert('Aucune parcelle active pour y noter la levée.'); return; }
+  const dose=cNum('cl_dose'), pmg=cNum('cl_pmg'), plants=cNum('cl_plants');
+  const gr=(pmg>0)? dose*100/pmg : 0;
+  const lev=(gr>0)? plants/gr*100 : 0;
+  if(!(lev>0&&plants>0)){ alert('Renseigne la dose semée, le PMG et les pieds levés avant de noter le taux de levée.'); return; }
+  const txt='Levée '+calcFmt(lev,0)+' % — '+calcFmt(plants,0)+' pieds/m² levés sur '+calcFmt(gr,0)+' grains semés (dose '+calcFmt(dose,0)+' kg/ha, PMG '+calcFmt(pmg,1)+' g)';
+  if(!Array.isArray(cr.cropNotes)) cr.cropNotes=[];
+  cr.cropNotes.push({id:ecoId(), date:new Date().toISOString().slice(0,10), text:txt});
+  save();
+  const pname=((cr.eco&&cr.eco.parcelName)||'').trim()||cr.name||'';
+  alert('Note ajoutée à la parcelle active'+(pname?' « '+pname+' »':'')+' :\n\n'+txt+'\n\nTu la retrouves dans Journal / saisie → Notes de terrain.');
+}
 
 /* ---- Import / Export ---- */
 function exportDlvGroup(year, coop, culture){
